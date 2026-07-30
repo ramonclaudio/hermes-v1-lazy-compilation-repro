@@ -1,14 +1,18 @@
 import { writeFileSync } from 'node:fs';
 
-const moduleCount = Number.parseInt(process.argv[2] ?? '', 10);
-const functionsPerModule = Number.parseInt(process.argv[3] ?? '', 10);
+const moduleCountText = process.argv[2] ?? '';
+const functionsPerModuleText = process.argv[3] ?? '';
+const moduleCount = Number(moduleCountText);
+const functionsPerModule = Number(functionsPerModuleText);
 const outputPath = process.argv[4];
+const expectedChecksum = (moduleCount * (moduleCount - 1)) / 2;
 
 if (
+  !/^[1-9]\d*$/.test(moduleCountText) ||
   !Number.isSafeInteger(moduleCount) ||
-  moduleCount < 1 ||
+  !/^(0|[1-9]\d*)$/.test(functionsPerModuleText) ||
   !Number.isSafeInteger(functionsPerModule) ||
-  functionsPerModule < 0 ||
+  !Number.isSafeInteger(expectedChecksum) ||
   !outputPath
 ) {
   console.error(

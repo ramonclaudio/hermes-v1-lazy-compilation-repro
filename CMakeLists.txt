@@ -4,6 +4,7 @@ project(HermesLazyCompilationRepro LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if(NOT HERMES_SOURCE_DIR)
   message(FATAL_ERROR "Pass -DHERMES_SOURCE_DIR=/absolute/path/to/hermes")
@@ -23,3 +24,12 @@ add_hermes_tool(hermes-lazy-bench
 set_target_properties(hermes-lazy-bench PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
+
+if(MSVC)
+  target_compile_options(hermes-lazy-bench PRIVATE /W4 /WX)
+else()
+  target_compile_options(
+    hermes-lazy-bench
+    PRIVATE -Wall -Wextra -Werror
+  )
+endif()

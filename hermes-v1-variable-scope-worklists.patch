@@ -1,21 +1,21 @@
 diff --git a/include/hermes/IR/IR.h b/include/hermes/IR/IR.h
-index 491b6d30e..5d5d85d07 100644
+index ea267abe3..0f55ef8ce 100644
 --- a/include/hermes/IR/IR.h
 +++ b/include/hermes/IR/IR.h
-@@ -2518,6 +2518,12 @@ class Module : public Value {
+@@ -2147,6 +2147,12 @@ class Module : public Value {
    /// List of all the VariableScopes owned by this module.
    VariableScopeListType variableScopes_{};
  
 +  /// VariableScopes which have been added since indices were last assigned.
 +  llvh::SmallPtrSet<VariableScope *, 16> unassignedVariableScopes_{};
 +
-+  /// VariableScopes which might have become unused while compiling new code.
++  /// VariableScopes which may no longer have any users.
 +  llvh::SmallPtrSet<VariableScope *, 16> variableScopesToCheck_{};
 +
    GlobalObject globalObject_{};
    LiteralEmpty literalEmpty{};
    LiteralUninit literalUninit_{};
-@@ -2677,6 +2683,16 @@ class Module : public Value {
+@@ -2314,6 +2320,21 @@ class Module : public Value {
      return variableScopes_;
    }
  
@@ -29,10 +29,15 @@ index 491b6d30e..5d5d85d07 100644
 +  /// Remove and destroy a VariableScope owned by this Module.
 +  void removeVariableScope(VariableScope *variableScope);
 +
++  /// Remember that a VariableScope lost its last user.
++  void markVariableScopeForDeletionCheck(VariableScope *variableScope) {
++    variableScopesToCheck_.insert(variableScope);
++  }
++
    OptimizationContext &getOptimizationContext() {
      return optContext_;
    }
-@@ -2684,10 +2700,11 @@ class Module : public Value {
+@@ -2321,10 +2342,11 @@ class Module : public Value {
      return optContext_;
    }
  
@@ -48,59 +53,37 @@ index 491b6d30e..5d5d85d07 100644
  
    /// Create the specified global property if it doesn't exist. If it does
 diff --git a/lib/IR/IR.cpp b/lib/IR/IR.cpp
-index 59d6d7dd2..0796e671d 100644
+index ee0df386c..ab115cdde 100644
 --- a/lib/IR/IR.cpp
 +++ b/lib/IR/IR.cpp
-@@ -772,6 +772,15 @@ void Module::insert(iterator position, Function *F) {
+@@ -393,6 +393,10 @@ void Instruction::setOperand(Value *Val, unsigned Index) {
+   // Remove the current instruction from the old value that we are removing.
+   if (CurrentValue) {
+     CurrentValue->removeUse(Operands[Index]);
++    if (auto *variableScope = llvh::dyn_cast<VariableScope>(CurrentValue);
++        variableScope && !variableScope->hasUsers()) {
++      getModule()->markVariableScopeForDeletionCheck(variableScope);
++    }
+   }
+ 
+   // Register this instruction as a user of the new value and set the operand.
+@@ -777,6 +781,15 @@ void Module::insert(iterator position, Function *F) {
    FunctionList.insert(position, F);
  }
  
 +void Module::removeVariableScope(VariableScope *variableScope) {
 +  unassignedVariableScopes_.erase(variableScope);
 +  variableScopesToCheck_.erase(variableScope);
-+  auto &moduleNode = static_cast<
-+      llvh::ilist_node<VariableScope, llvh::ilist_tag<Module>> &>(
-+      *variableScope);
++  auto &moduleNode =
++      static_cast<llvh::ilist_node<VariableScope, llvh::ilist_tag<Module>> &>(
++          *variableScope);
 +  variableScopes_.erase(moduleNode.getIterator());
 +}
 +
  void Module::populateCJSModuleUseGraph() {
    if (!cjsModuleUseGraph_.empty()) {
      return;
-@@ -917,10 +926,24 @@ void Module::resetForMoreCompilation() {
- 
-   const DebugInfoSetting debugSetting = getContext().getDebugInfoSetting();
- 
-+  auto rememberVariableScopes = [this](Function &F) {
-+    for (BasicBlock &BB : F) {
-+      for (Instruction &I : BB) {
-+        for (unsigned i = 0, e = I.getNumOperands(); i != e; ++i) {
-+          if (auto *variableScope =
-+                  llvh::dyn_cast<VariableScope>(I.getOperand(i))) {
-+            variableScopesToCheck_.insert(variableScope);
-+          }
-+        }
-+      }
-+    }
-+  };
-+
-   llvh::SmallVector<Function *, 4> toDestroy{};
-   for (auto it = FunctionList.begin(), e = FunctionList.end(); it != e;) {
-     Function &F = *it++;
-     if (&F == topLevelFunction_) {
-+      rememberVariableScopes(F);
-       if (debugSetting == DebugInfoSetting::ALL) {
-         deleteBodyExceptEvalData(&F);
-       } else {
-@@ -933,6 +956,7 @@ void Module::resetForMoreCompilation() {
-       continue;
-     }
- 
-+    rememberVariableScopes(F);
-     if (debugSetting == DebugInfoSetting::ALL) {
-       // If we need to preserve eval data, don't delete the Function.
-       deleteBodyExceptEvalData(&F);
-@@ -957,16 +981,18 @@ void Module::resetForMoreCompilation() {
+@@ -962,16 +975,18 @@ void Module::resetForMoreCompilation() {
    // its variables.
    // Don't delete any unused variables from VariableScopes here, because they
    // may be captured in the future.
@@ -128,7 +111,7 @@ index 59d6d7dd2..0796e671d 100644
  
  void Module::viewGraph() {
 diff --git a/lib/IR/IRBuilder.cpp b/lib/IR/IRBuilder.cpp
-index 74e16376f..1605d7406 100644
+index 5a58b608e..5bbfd8e14 100644
 --- a/lib/IR/IRBuilder.cpp
 +++ b/lib/IR/IRBuilder.cpp
 @@ -177,7 +177,7 @@ Variable *IRBuilder::createVariable(
@@ -154,3 +137,44 @@ index 8a6c9c15f..9124a80bd 100644
        continue;
      }
  
+diff --git a/unittests/IR/VariableTest.cpp b/unittests/IR/VariableTest.cpp
+index de3e32831..0e4512969 100644
+--- a/unittests/IR/VariableTest.cpp
++++ b/unittests/IR/VariableTest.cpp
+@@ -91,4 +91,36 @@ TEST(VariableTest, ReorderHidden) {
+   }
+ }
+ 
++TEST(VariableTest, DeleteScopeAfterLastUserIsRemoved) {
++  auto Ctx = std::make_shared<Context>();
++  Module M{Ctx};
++  IRBuilder Builder(&M);
++
++  auto *topLevel = Builder.createTopLevelFunction("global", true);
++  auto *topLevelBlock = Builder.createBasicBlock(topLevel);
++  Builder.setInsertionBlock(topLevelBlock);
++  Builder.createUnreachableInst();
++
++  auto *scope = Builder.createVariableScope(nullptr);
++  auto *compiledFunction = Builder.createFunction(
++      "compiled", Function::DefinitionKind::ES5Function, true);
++  auto *compiledBlock = Builder.createBasicBlock(compiledFunction);
++  Builder.setInsertionBlock(compiledBlock);
++  Builder.createCreateScopeInst(scope, Builder.getEmptySentinel());
++  Builder.createReturnInst(Builder.getLiteralUndefined());
++  compiledFunction->moveToCompiledFunctionList();
++
++  // Clear the initial candidate set while the scope still has a user.
++  M.assignIndexToVariables();
++  M.resetForMoreCompilation();
++  ASSERT_EQ(1u, M.getVariableScopes().size());
++
++  // This is the same removal path used by BytecodeFunction's destructor.
++  compiledFunction->eraseFromCompiledFunctionsNoDestroy();
++  Value::destroy(compiledFunction);
++  M.resetForMoreCompilation();
++
++  EXPECT_TRUE(M.getVariableScopes().empty());
++}
++
+ } // end anonymous namespace
