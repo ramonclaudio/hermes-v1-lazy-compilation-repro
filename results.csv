@@ -1,0 +1,22 @@
+engine,revision,mode,modules,functions_per_module,evaluation_ms,checksum,notes
+Hermes legacy,hermes-v0.14.1,smart,8000,8,4474.024,31996000,SDK 55 default engine control
+Hermes legacy,hermes-v0.14.1,smart,24000,8,34754.303,287988000,SDK 55 default engine control
+Hermes legacy,hermes-v0.14.1,eager,24000,8,2036.928,287988000,SDK 55 default engine control
+Hermes V1,hermes-v250829098.0.10,smart,500,8,35.2,124750,SDK 56 engine
+Hermes V1,hermes-v250829098.0.10,smart,1000,8,82.8,499500,SDK 56 engine
+Hermes V1,hermes-v250829098.0.10,smart,2000,8,220.6,1999000,SDK 56 engine
+Hermes V1,hermes-v250829098.0.10,smart,4000,8,681.9,7998000,SDK 56 engine
+Hermes V1,hermes-v250829098.0.10,smart,8000,8,2540.3,31996000,SDK 56 engine
+Hermes V1,hermes-v250829098.0.14,smart,8000,8,2743.690,31996000,exact SDK 57 RN 0.86.0 engine
+Hermes V1,hermes-v250829098.0.16,smart,500,8,34.1,124750,SDK 57 latest RN V1 engine
+Hermes V1,hermes-v250829098.0.16,smart,1000,8,84.5,499500,SDK 57 latest RN V1 engine
+Hermes V1,hermes-v250829098.0.16,smart,2000,8,223.1,1999000,SDK 57 latest RN V1 engine
+Hermes V1,hermes-v250829098.0.16,smart,4000,8,671.4,7998000,SDK 57 latest RN V1 engine
+Hermes V1,hermes-v250829098.0.16,smart,8000,8,2531.0,31996000,SDK 57 latest RN V1 engine representative run
+Hermes V1,hermes-v250829098.0.16,smart,24000,8,255504.961,287988000,unpatched pathological run
+Hermes V1 patched,hermes-v250829098.0.16+worklists,smart,100,8,18.6,4950,candidate fix
+Hermes V1 patched,hermes-v250829098.0.16+worklists,smart,4000,8,241.8,7998000,candidate fix
+Hermes V1 patched,hermes-v250829098.0.16+worklists,smart,8000,8,497.5,31996000,candidate fix
+Hermes V1 patched,hermes-v250829098.0.16+worklists,smart,24000,8,1869.440,287988000,candidate fix final run
+Hermes V1 patched,hermes-v250829098.0.16+worklists,eager,24000,8,1549.990,287988000,candidate fix
+Hermes V1 patched,hermes-v250829098.0.16+worklists,lazy,24000,8,1534.780,287988000,candidate fix

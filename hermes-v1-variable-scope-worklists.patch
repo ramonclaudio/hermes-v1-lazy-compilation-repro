@@ -1,0 +1,156 @@
+diff --git a/include/hermes/IR/IR.h b/include/hermes/IR/IR.h
+index 491b6d30e..5d5d85d07 100644
+--- a/include/hermes/IR/IR.h
++++ b/include/hermes/IR/IR.h
+@@ -2518,6 +2518,12 @@ class Module : public Value {
+   /// List of all the VariableScopes owned by this module.
+   VariableScopeListType variableScopes_{};
+ 
++  /// VariableScopes which have been added since indices were last assigned.
++  llvh::SmallPtrSet<VariableScope *, 16> unassignedVariableScopes_{};
++
++  /// VariableScopes which might have become unused while compiling new code.
++  llvh::SmallPtrSet<VariableScope *, 16> variableScopesToCheck_{};
++
+   GlobalObject globalObject_{};
+   LiteralEmpty literalEmpty{};
+   LiteralUninit literalUninit_{};
+@@ -2677,6 +2683,16 @@ class Module : public Value {
+     return variableScopes_;
+   }
+ 
++  /// Add a VariableScope owned by this Module.
++  void addVariableScope(VariableScope *variableScope) {
++    variableScopes_.push_back(variableScope);
++    unassignedVariableScopes_.insert(variableScope);
++    variableScopesToCheck_.insert(variableScope);
++  }
++
++  /// Remove and destroy a VariableScope owned by this Module.
++  void removeVariableScope(VariableScope *variableScope);
++
+   OptimizationContext &getOptimizationContext() {
+     return optContext_;
+   }
+@@ -2684,10 +2700,11 @@ class Module : public Value {
+     return optContext_;
+   }
+ 
+-  /// Assign index to all Variables in all VariableScopes.
++  /// Assign indices to Variables in newly-created VariableScopes.
+   void assignIndexToVariables() {
+-    for (VariableScope &varScope : variableScopes_)
+-      varScope.assignIndexToVariables();
++    for (VariableScope *varScope : unassignedVariableScopes_)
++      varScope->assignIndexToVariables();
++    unassignedVariableScopes_.clear();
+   }
+ 
+   /// Create the specified global property if it doesn't exist. If it does
+diff --git a/lib/IR/IR.cpp b/lib/IR/IR.cpp
+index 59d6d7dd2..0796e671d 100644
+--- a/lib/IR/IR.cpp
++++ b/lib/IR/IR.cpp
+@@ -772,6 +772,15 @@ void Module::insert(iterator position, Function *F) {
+   FunctionList.insert(position, F);
+ }
+ 
++void Module::removeVariableScope(VariableScope *variableScope) {
++  unassignedVariableScopes_.erase(variableScope);
++  variableScopesToCheck_.erase(variableScope);
++  auto &moduleNode = static_cast<
++      llvh::ilist_node<VariableScope, llvh::ilist_tag<Module>> &>(
++      *variableScope);
++  variableScopes_.erase(moduleNode.getIterator());
++}
++
+ void Module::populateCJSModuleUseGraph() {
+   if (!cjsModuleUseGraph_.empty()) {
+     return;
+@@ -917,10 +926,24 @@ void Module::resetForMoreCompilation() {
+ 
+   const DebugInfoSetting debugSetting = getContext().getDebugInfoSetting();
+ 
++  auto rememberVariableScopes = [this](Function &F) {
++    for (BasicBlock &BB : F) {
++      for (Instruction &I : BB) {
++        for (unsigned i = 0, e = I.getNumOperands(); i != e; ++i) {
++          if (auto *variableScope =
++                  llvh::dyn_cast<VariableScope>(I.getOperand(i))) {
++            variableScopesToCheck_.insert(variableScope);
++          }
++        }
++      }
++    }
++  };
++
+   llvh::SmallVector<Function *, 4> toDestroy{};
+   for (auto it = FunctionList.begin(), e = FunctionList.end(); it != e;) {
+     Function &F = *it++;
+     if (&F == topLevelFunction_) {
++      rememberVariableScopes(F);
+       if (debugSetting == DebugInfoSetting::ALL) {
+         deleteBodyExceptEvalData(&F);
+       } else {
+@@ -933,6 +956,7 @@ void Module::resetForMoreCompilation() {
+       continue;
+     }
+ 
++    rememberVariableScopes(F);
+     if (debugSetting == DebugInfoSetting::ALL) {
+       // If we need to preserve eval data, don't delete the Function.
+       deleteBodyExceptEvalData(&F);
+@@ -957,16 +981,18 @@ void Module::resetForMoreCompilation() {
+   // its variables.
+   // Don't delete any unused variables from VariableScopes here, because they
+   // may be captured in the future.
+-  for (auto it = variableScopes_.begin(); it != variableScopes_.end();) {
+-    if (it->hasUsers()) {
+-      // Skip VariableScopes with users.
+-      ++it;
+-    } else {
+-      // If no users, delete the VariableScope.
+-      it->removeFromScopeChain();
+-      variableScopes_.erase(it++);
++  llvh::SmallVector<VariableScope *, 16> unusedVariableScopes{};
++  for (VariableScope *variableScope : variableScopesToCheck_) {
++    if (!variableScope->hasUsers()) {
++      unusedVariableScopes.push_back(variableScope);
+     }
+   }
++  variableScopesToCheck_.clear();
++  for (VariableScope *variableScope : unusedVariableScopes) {
++    // If no users, delete the VariableScope.
++    variableScope->removeFromScopeChain();
++    removeVariableScope(variableScope);
++  }
+ }
+ 
+ void Module::viewGraph() {
+diff --git a/lib/IR/IRBuilder.cpp b/lib/IR/IRBuilder.cpp
+index 74e16376f..1605d7406 100644
+--- a/lib/IR/IRBuilder.cpp
++++ b/lib/IR/IRBuilder.cpp
+@@ -177,7 +177,7 @@ Variable *IRBuilder::createVariable(
+ 
+ VariableScope *IRBuilder::createVariableScope(VariableScope *parentScope) {
+   auto *newScope = new VariableScope(parentScope);
+-  M->getVariableScopes().push_back(newScope);
++  M->addVariableScope(newScope);
+   return newScope;
+ }
+ 
+diff --git a/lib/Optimizer/Scalar/Utils.cpp b/lib/Optimizer/Scalar/Utils.cpp
+index 8a6c9c15f..9124a80bd 100644
+--- a/lib/Optimizer/Scalar/Utils.cpp
++++ b/lib/Optimizer/Scalar/Utils.cpp
+@@ -203,7 +203,8 @@ bool deleteUnusedVariables(Module *M) {
+       // but may still have users in dead functions, so just move them to the
+       // parent and leave it to function DCE to eliminate their usage.
+       it->removeFromScopeChain();
+-      scopeList.erase(it++);
++      VariableScope *unusedScope = &*it++;
++      M->removeVariableScope(unusedScope);
+       continue;
+     }
+ 
